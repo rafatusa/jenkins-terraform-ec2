@@ -25,9 +25,9 @@
   args:
     creates: /usr/local/bin/jenkins-cli.jar
 
-- name: Install Java on host for Jenkins CLI
+- name: Install Java 21 on host for Jenkins CLI
   apt:
-    name: openjdk-17-jre-headless
+    name: openjdk-21-jre-headless
     state: present
 
 - name: Create Deploy-EC2 pipeline job via Jenkins CLI
