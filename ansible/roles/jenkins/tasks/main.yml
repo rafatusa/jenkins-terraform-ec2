@@ -1,21 +1,25 @@
 ---
-- name: Remove any stale Jenkins keyring
+- name: Remove any stale Jenkins keyring files
   file:
-    path: /usr/share/keyrings/jenkins-keyring.gpg
+    path: "{{ item }}"
     state: absent
+  loop:
+    - /usr/share/keyrings/jenkins-keyring.gpg
+    - /usr/share/keyrings/jenkins-keyring.asc
+    - /etc/apt/sources.list.d/jenkins.list
 
-- name: Download and dearmor Jenkins GPG key
-  shell: |
-    curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | \
-      gpg --dearmor -o /usr/share/keyrings/jenkins-keyring.gpg
-  args:
-    creates: /usr/share/keyrings/jenkins-keyring.gpg
+- name: Download Jenkins GPG key (official method)
+  get_url:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+    dest: /usr/share/keyrings/jenkins-keyring.asc
+    mode: '0644'
+    force: true
 
 - name: Write Jenkins apt sources list
   copy:
     dest: /etc/apt/sources.list.d/jenkins.list
     content: |
-      deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg] https://pkg.jenkins.io/debian-stable binary/
+      deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/
     mode: '0644'
 
 - name: Update apt cache after adding Jenkins repo
