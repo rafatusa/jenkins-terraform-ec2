@@ -1,0 +1,46 @@
+---
+- name: Check if Terraform is already installed
+  stat:
+    path: /usr/local/bin/terraform
+  register: terraform_bin
+
+- name: Get latest Terraform version
+  uri:
+    url: https://checkpoint-api.hashicorp.com/v1/check/terraform
+    return_content: true
+  register: tf_version_check
+  when: not terraform_bin.stat.exists
+
+- name: Set Terraform version fact
+  set_fact:
+    terraform_version: "{{ tf_version_check.json.current_version }}"
+  when: not terraform_bin.stat.exists
+
+- name: Download Terraform
+  get_url:
+    url: "https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_linux_amd64.zip"
+    dest: "/tmp/terraform_{{ terraform_version }}_linux_amd64.zip"
+    mode: '0644'
+  when: not terraform_bin.stat.exists
+
+- name: Unzip Terraform
+  unarchive:
+    src: "/tmp/terraform_{{ terraform_version }}_linux_amd64.zip"
+    dest: /usr/local/bin
+    remote_src: true
+    creates: /usr/local/bin/terraform
+  when: not terraform_bin.stat.exists
+
+- name: Set Terraform executable permissions
+  file:
+    path: /usr/local/bin/terraform
+    mode: '0755'
+
+- name: Verify Terraform installation
+  command: terraform version
+  changed_when: false
+  register: tf_verify
+
+- name: Show Terraform version
+  debug:
+    msg: "{{ tf_verify.stdout_lines[0] }}"

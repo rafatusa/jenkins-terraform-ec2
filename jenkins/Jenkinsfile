@@ -1,0 +1,149 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    parameters {
+        choice(
+            name: 'ACTION',
+            choices: ['plan', 'apply', 'destroy'],
+            description: 'Terraform action to perform'
+        )
+        string(
+            name: 'INSTANCE_TYPE',
+            defaultValue: 't3.micro',
+            description: 'EC2 instance type for the target instance'
+        )
+    }
+
+    environment {
+        TF_DIR          = 'infra/target-ec2'
+        TF_STATE_BUCKET = credentials('TF_STATE_BUCKET')
+        TF_STATE_KEY    = 'jenkins-terraform-ec2/target-ec2/terraform.tfstate'
+        AWS_REGION      = 'us-east-1'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ),
+                    string(credentialsId: 'SSH_PUBLIC_KEY', variable: 'TF_VAR_SSH_PUBLIC_KEY')
+                ]) {
+                    dir("${TF_DIR}") {
+                        sh '''
+                            terraform init -input=false -reconfigure \
+                                -backend-config="bucket=${TF_STATE_BUCKET}" \
+                                -backend-config="key=${TF_STATE_KEY}" \
+                                -backend-config="region=${AWS_REGION}"
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ),
+                    string(credentialsId: 'SSH_PUBLIC_KEY', variable: 'TF_VAR_SSH_PUBLIC_KEY')
+                ]) {
+                    dir("${TF_DIR}") {
+                        sh '''
+                            terraform plan -input=false \
+                                -var="ssh_public_key=${TF_VAR_SSH_PUBLIC_KEY}" \
+                                -var="instance_type=${INSTANCE_TYPE}" \
+                                -out=tfplan
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Approval') {
+            when {
+                expression { params.ACTION == 'apply' || params.ACTION == 'destroy' }
+            }
+            steps {
+                input message: "Approve Terraform ${params.ACTION}?",
+                      ok: 'Proceed',
+                      submitter: 'admin'
+            }
+        }
+
+        stage('Terraform Apply') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ),
+                    string(credentialsId: 'SSH_PUBLIC_KEY', variable: 'TF_VAR_SSH_PUBLIC_KEY')
+                ]) {
+                    dir("${TF_DIR}") {
+                        sh 'terraform apply -input=false tfplan'
+                        sh 'echo "=== Target EC2 Output ===" && terraform output'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Destroy') {
+            when {
+                expression { params.ACTION == 'destroy' }
+            }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ),
+                    string(credentialsId: 'SSH_PUBLIC_KEY', variable: 'TF_VAR_SSH_PUBLIC_KEY')
+                ]) {
+                    dir("${TF_DIR}") {
+                        sh '''
+                            terraform destroy -input=false -auto-approve \
+                                -var="ssh_public_key=${TF_VAR_SSH_PUBLIC_KEY}" \
+                                -var="instance_type=${INSTANCE_TYPE}"
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline completed successfully: ACTION=${params.ACTION}"
+        }
+        failure {
+            echo "Pipeline FAILED: ACTION=${params.ACTION} — check logs above."
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

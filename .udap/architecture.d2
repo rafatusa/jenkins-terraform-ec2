@@ -1,0 +1,19 @@
+# udap:meta cloud=aws region=us-east-1 target=ec2
+
+vpc: AWS VPC (us-east-1) {
+  jenkins: Jenkins Server (EC2) { shape: rectangle; udap-type: aws.ec2 }
+  sg_jenkins: Jenkins Security Group { shape: rectangle; udap-type: aws.ec2 }
+  eip: Elastic IP { shape: rectangle; udap-type: aws.ec2 }
+  target_ec2: Target EC2 Instance (Terraform-deployed) { shape: rectangle; udap-type: aws.ec2 }
+}
+user: Developer { shape: person; udap-type: generic.user }
+github: GitHub Repo { shape: rectangle; udap-type: generic.app }
+s3_state: S3 Terraform State Bucket { shape: rectangle; udap-type: aws.s3 }
+
+user -> github: push / trigger
+github -> vpc.jenkins: CI deploys & configures Jenkins
+user -> vpc.eip: browse :80 (Nginx → Jenkins :8080)
+vpc.eip -> vpc.jenkins: forwards to Jenkins
+vpc.jenkins -> s3_state: stores Terraform state
+vpc.jenkins -> vpc.target_ec2: Jenkins pipeline provisions via Terraform
+vpc.sg_jenkins -> vpc.jenkins: controls inbound 22, 80

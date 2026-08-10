@@ -1,0 +1,76 @@
+version: 1
+name: jenkins-terraform-ec2
+vcs: github
+
+stages:
+  - id: provision
+    kind: provision
+    timeout_minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_project_name: ${{ secrets.PROJECT_NAME }}
+    steps:
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+      - name: Terraform Init
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
+            -backend-config="region=us-east-1"
+        working-directory: infra
+      - name: Terraform Apply
+        id: tf_apply
+        run: terraform apply -input=false -auto-approve
+        working-directory: infra
+      - name: Get Jenkins IP
+        id: get_ip
+        run: |
+          echo "jenkins_ip=$(terraform output -raw jenkins_public_ip)" >> "$GITHUB_OUTPUT"
+        working-directory: infra
+    outputs:
+      jenkins_ip: ${{ steps.get_ip.outputs.jenkins_ip }}
+
+  - id: configure
+    kind: configure
+    needs: [provision]
+    timeout_minutes: 30
+    steps:
+      - name: Install Ansible
+        run: pip install ansible-core
+      - name: Write SSH Key
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+      - name: Scan Host Key
+        run: |
+          ssh-keyscan -H "${{ needs.provision.outputs.jenkins_ip }}" >> ~/.ssh/known_hosts
+      - name: Generate Inventory
+        run: |
+          cat > ansible/inventory.ini <<EOF
+          [jenkins]
+          ${{ needs.provision.outputs.jenkins_ip }} ansible_user=${{ secrets.SSH_USER }} ansible_ssh_private_key_file=~/.ssh/deploy_key
+          EOF
+      - name: Run Ansible Playbook
+        run: ansible-playbook -i ansible/inventory.ini ansible/site.yml
+        env:
+          JENKINS_ADMIN_PASSWORD: ${{ secrets.JENKINS_ADMIN_PASSWORD }}
+
+  - id: verify
+    kind: verify
+    needs: [provision, configure]
+    timeout_minutes: 10
+    steps:
+      - name: Health Check Jenkins
+        run: |
+          curl --fail --retry 15 --retry-delay 20 --retry-all-errors \
+            http://${{ needs.provision.outputs.jenkins_ip }}/login
+
+rollback:
+  strategy: manual

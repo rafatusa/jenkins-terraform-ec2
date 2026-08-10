@@ -1,0 +1,11 @@
+---
+- name: Configure Jenkins Server
+  hosts: jenkins
+  become: true
+  gather_facts: true
+
+  roles:
+    - common
+    - jenkins
+    - nginx
+    - terraform_install

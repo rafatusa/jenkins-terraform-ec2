@@ -1,0 +1,37 @@
+---
+- name: Install Jenkins CLI jar
+  get_url:
+    url: "http://127.0.0.1:8080/jnlpJars/jenkins-cli.jar"
+    dest: /usr/local/bin/jenkins-cli.jar
+    mode: '0644'
+  retries: 10
+  delay: 15
+
+- name: Wait for Jenkins API to be responsive
+  uri:
+    url: "http://127.0.0.1:8080/api/json"
+    user: admin
+    password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+    force_basic_auth: true
+    status_code: 200
+  register: jenkins_api
+  retries: 12
+  delay: 15
+  until: jenkins_api.status == 200
+  no_log: true
+
+- name: Copy Deploy-EC2 job XML
+  copy:
+    src: seed-job.xml
+    dest: /tmp/deploy-ec2-job.xml
+    mode: '0644'
+
+- name: Create Deploy-EC2 pipeline job via Jenkins CLI
+  shell: |
+    java -jar /usr/local/bin/jenkins-cli.jar \
+      -s http://127.0.0.1:8080 \
+      -auth "admin:{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}" \
+      create-job "Deploy-EC2" < /tmp/deploy-ec2-job.xml
+  args:
+    creates: /var/lib/jenkins/jobs/Deploy-EC2/config.xml
+  no_log: true

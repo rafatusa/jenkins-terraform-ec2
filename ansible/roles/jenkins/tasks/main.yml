@@ -1,0 +1,73 @@
+---
+- name: Add Jenkins apt key
+  get_url:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+    dest: /usr/share/keyrings/jenkins-keyring.asc
+    mode: '0644'
+
+- name: Add Jenkins apt repository
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/"
+    state: present
+    filename: jenkins
+
+- name: Update apt cache after adding Jenkins repo
+  apt:
+    update_cache: true
+
+- name: Install Jenkins
+  apt:
+    name: jenkins
+    state: present
+
+- name: Create Jenkins override directory
+  file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    mode: '0755'
+
+- name: Configure Jenkins to skip setup wizard
+  copy:
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
+    content: |
+      [Service]
+      Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false"
+    mode: '0644'
+  notify: Restart Jenkins
+
+- name: Create Jenkins init scripts directory
+  file:
+    path: /var/lib/jenkins/init.groovy.d
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: '0755'
+
+- name: Deploy admin user init script
+  template:
+    src: basic-security.groovy.j2
+    dest: /var/lib/jenkins/init.groovy.d/basic-security.groovy
+    owner: jenkins
+    group: jenkins
+    mode: '0600'
+  no_log: true
+  notify: Restart Jenkins
+
+- name: Daemon reload
+  systemd:
+    daemon_reload: true
+
+- name: Enable and start Jenkins
+  systemd:
+    name: jenkins
+    enabled: true
+    state: started
+
+- name: Wait for Jenkins to be up on port 8080
+  wait_for:
+    port: 8080
+    host: 127.0.0.1
+    timeout: 180
+
+- name: Seed the Deploy-EC2 pipeline job
+  import_tasks: seed_job.yml
