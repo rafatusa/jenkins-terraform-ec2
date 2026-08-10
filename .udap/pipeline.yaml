@@ -37,10 +37,12 @@ stages:
   - id: configure
     kind: configure
     needs: [provision]
-    timeout_minutes: 30
+    timeout_minutes: 45
     steps:
       - name: Install Ansible
         run: pip install ansible-core
+      - name: Install community.docker collection
+        run: ansible-galaxy collection install community.docker
       - name: Write SSH Key
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}

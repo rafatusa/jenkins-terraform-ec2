@@ -1,6 +1,6 @@
 ---
-- name: Restart Jenkins
-  systemd:
+- name: Restart Jenkins container
+  community.docker.docker_container:
     name: jenkins
-    state: restarted
-    daemon_reload: true
+    state: started
+    restart: true

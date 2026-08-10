@@ -30,5 +30,44 @@
       - git
       - apt-transport-https
       - software-properties-common
-      - openjdk-17-jdk
     state: present
+
+- name: Install Docker GPG key
+  shell: |
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | gpg --dearmor -o /usr/share/keyrings/docker.gpg
+  args:
+    creates: /usr/share/keyrings/docker.gpg
+
+- name: Add Docker apt repository
+  copy:
+    dest: /etc/apt/sources.list.d/docker.list
+    content: |
+      deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+    mode: '0644'
+
+- name: Update apt cache after adding Docker repo
+  apt:
+    update_cache: true
+
+- name: Install Docker CE
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+
+- name: Enable and start Docker
+  systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add SSH user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true

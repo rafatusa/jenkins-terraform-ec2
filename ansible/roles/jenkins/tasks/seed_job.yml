@@ -1,12 +1,4 @@
 ---
-- name: Install Jenkins CLI jar
-  get_url:
-    url: "http://127.0.0.1:8080/jnlpJars/jenkins-cli.jar"
-    dest: /usr/local/bin/jenkins-cli.jar
-    mode: '0644'
-  retries: 10
-  delay: 15
-
 - name: Wait for Jenkins API to be responsive
   uri:
     url: "http://127.0.0.1:8080/api/json"
@@ -15,23 +7,37 @@
     force_basic_auth: true
     status_code: 200
   register: jenkins_api
-  retries: 12
+  retries: 20
   delay: 15
   until: jenkins_api.status == 200
   no_log: true
 
-- name: Copy Deploy-EC2 job XML
+- name: Copy Deploy-EC2 job XML to Jenkins home
   copy:
     src: seed-job.xml
-    dest: /tmp/deploy-ec2-job.xml
+    dest: /var/jenkins_home/deploy-ec2-job.xml
     mode: '0644'
+
+- name: Download Jenkins CLI jar from running container
+  shell: |
+    curl -fsSL -o /usr/local/bin/jenkins-cli.jar \
+      http://127.0.0.1:8080/jnlpJars/jenkins-cli.jar
+  args:
+    creates: /usr/local/bin/jenkins-cli.jar
+
+- name: Install Java on host for Jenkins CLI
+  apt:
+    name: openjdk-17-jre-headless
+    state: present
 
 - name: Create Deploy-EC2 pipeline job via Jenkins CLI
   shell: |
     java -jar /usr/local/bin/jenkins-cli.jar \
       -s http://127.0.0.1:8080 \
-      -auth "admin:{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}" \
-      create-job "Deploy-EC2" < /tmp/deploy-ec2-job.xml
+      -auth "admin:${JENKINS_ADMIN_PASSWORD}" \
+      create-job "Deploy-EC2" < /var/jenkins_home/deploy-ec2-job.xml
   args:
-    creates: /var/lib/jenkins/jobs/Deploy-EC2/config.xml
+    creates: /var/jenkins_home/jobs/Deploy-EC2/config.xml
+  environment:
+    JENKINS_ADMIN_PASSWORD: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
   no_log: true

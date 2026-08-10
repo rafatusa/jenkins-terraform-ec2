@@ -1,83 +1,61 @@
 ---
-- name: Remove any stale Jenkins keyring files
+- name: Create Jenkins home directory on host
   file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /usr/share/keyrings/jenkins-keyring.gpg
-    - /usr/share/keyrings/jenkins-keyring.asc
-    - /etc/apt/sources.list.d/jenkins.list
-
-- name: Download current Jenkins signing key by key ID
-  shell: |
-    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?search=0x7198F4B714ABFC68&op=get" \
-      -o /usr/share/keyrings/jenkins-keyring.asc
-  changed_when: true
-
-- name: Write Jenkins apt sources list
-  copy:
-    dest: /etc/apt/sources.list.d/jenkins.list
-    content: |
-      deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/
-    mode: '0644'
-
-- name: Update apt cache after adding Jenkins repo
-  apt:
-    update_cache: true
-
-- name: Install Jenkins
-  apt:
-    name: jenkins
-    state: present
-
-- name: Create Jenkins override directory
-  file:
-    path: /etc/systemd/system/jenkins.service.d
+    path: /var/jenkins_home
     state: directory
+    owner: 1000
+    group: 1000
     mode: '0755'
 
-- name: Configure Jenkins to skip setup wizard
-  copy:
-    dest: /etc/systemd/system/jenkins.service.d/override.conf
-    content: |
-      [Service]
-      Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false"
-    mode: '0644'
-  notify: Restart Jenkins
-
-- name: Create Jenkins init scripts directory
+- name: Create Jenkins init.groovy.d directory
   file:
-    path: /var/lib/jenkins/init.groovy.d
+    path: /var/jenkins_home/init.groovy.d
     state: directory
-    owner: jenkins
-    group: jenkins
+    owner: 1000
+    group: 1000
     mode: '0755'
 
 - name: Deploy admin user init script
   template:
     src: basic-security.groovy.j2
-    dest: /var/lib/jenkins/init.groovy.d/basic-security.groovy
-    owner: jenkins
-    group: jenkins
+    dest: /var/jenkins_home/init.groovy.d/basic-security.groovy
+    owner: 1000
+    group: 1000
     mode: '0600'
   no_log: true
-  notify: Restart Jenkins
 
-- name: Daemon reload
-  systemd:
-    daemon_reload: true
+- name: Pull Jenkins LTS Docker image
+  community.docker.docker_image:
+    name: jenkins/jenkins
+    tag: lts
+    source: pull
 
-- name: Enable and start Jenkins
-  systemd:
+- name: Run Jenkins container
+  community.docker.docker_container:
     name: jenkins
-    enabled: true
+    image: jenkins/jenkins:lts
     state: started
+    restart_policy: always
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - /var/jenkins_home:/var/jenkins_home
+    env:
+      JAVA_OPTS: "-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+  notify: Restart Jenkins container
 
 - name: Wait for Jenkins to be up on port 8080
   wait_for:
     port: 8080
     host: 127.0.0.1
-    timeout: 180
+    timeout: 300
 
 - name: Seed the Deploy-EC2 pipeline job
   import_tasks: seed_job.yml
