@@ -57,7 +57,7 @@ resource "aws_security_group" "jenkins" {
   }
 
   ingress {
-    description = "HTTP (Nginx → Jenkins)"
+    description = "HTTP via Nginx to Jenkins"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
