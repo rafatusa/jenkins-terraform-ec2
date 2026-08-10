@@ -12,6 +12,17 @@
   until: jenkins_api.status == 200
   no_log: true
 
+- name: Set Jenkins URL via script console (required for CLI handshake)
+  uri:
+    url: "http://127.0.0.1:8080/scriptText"
+    method: POST
+    user: admin
+    password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+    force_basic_auth: true
+    body: "script=import+jenkins.model.*%3BJenkinsLocationConfiguration.get().setUrl('http%3A%2F%2F{{ ansible_host }}%3A8080%2F')%3BJenkinsLocationConfiguration.get().save()"
+    status_code: 200
+  no_log: true
+
 - name: Copy Deploy-EC2 job XML to Jenkins home
   copy:
     src: seed-job.xml

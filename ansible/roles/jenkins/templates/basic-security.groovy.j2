@@ -4,6 +4,12 @@ import hudson.security.*
 
 def instance = Jenkins.getInstance()
 
+// Set Jenkins URL so CLI handshake works
+def jlc = JenkinsLocationConfiguration.get()
+jlc.setUrl("http://{{ ansible_host }}:8080/")
+jlc.save()
+
+// Create admin user
 def hudsonRealm = new HudsonPrivateSecurityRealm(false)
 hudsonRealm.createAccount('admin', '{{ lookup("env", "JENKINS_ADMIN_PASSWORD") }}')
 instance.setSecurityRealm(hudsonRealm)
