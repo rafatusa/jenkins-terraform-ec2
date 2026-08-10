@@ -49,13 +49,38 @@
       timeout: 10s
       retries: 10
       start_period: 60s
-  notify: Restart Jenkins container
 
 - name: Wait for Jenkins to be up on port 8080
   wait_for:
     port: 8080
     host: 127.0.0.1
     timeout: 300
+
+- name: Install Pipeline and Git plugins via jenkins-plugin-cli
+  command: >
+    docker exec -u root jenkins
+    jenkins-plugin-cli --plugins "workflow-aggregator:latest git:latest"
+    --plugin-download-directory /var/jenkins_home/plugins
+  register: plugin_install
+  changed_when: "'Done' in plugin_install.stdout"
+
+- name: Restart Jenkins container to load plugins
+  community.docker.docker_container:
+    name: jenkins
+    state: started
+    restart: true
+
+- name: Wait for Jenkins to come back up after plugin install
+  uri:
+    url: "http://127.0.0.1:8080/api/json"
+    user: admin
+    password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+    force_basic_auth: true
+    status_code: 200
+  register: jenkins_ready
+  retries: 20
+  delay: 15
+  until: jenkins_ready.status == 200
 
 - name: Seed the Deploy-EC2 pipeline job
   import_tasks: seed_job.yml

@@ -22,25 +22,143 @@
           <description>EC2 instance type for the target instance</description>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>TF_STATE_BUCKET</name>
+          <defaultValue></defaultValue>
+          <description>S3 bucket name for Terraform state (set from Jenkins credentials)</description>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
-  <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
-    <scm class="hudson.plugins.git.GitSCM" plugin="git">
-      <configVersion>2</configVersion>
-      <userRemoteConfigs>
-        <hudson.plugins.git.UserRemoteConfig>
-          <url>REPO_URL_PLACEHOLDER</url>
-        </hudson.plugins.git.UserRemoteConfig>
-      </userRemoteConfigs>
-      <branches>
-        <hudson.plugins.git.BranchSpec>
-          <name>*/main</name>
-        </hudson.plugins.git.BranchSpec>
-      </branches>
-    </scm>
-    <scriptPath>jenkins/Jenkinsfile</scriptPath>
-    <lightweight>true</lightweight>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 30, unit: &apos;MINUTES&apos;)
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: &apos;10&apos;))
+    }
+
+    parameters {
+        choice(
+            name: &apos;ACTION&apos;,
+            choices: [&apos;plan&apos;, &apos;apply&apos;, &apos;destroy&apos;],
+            description: &apos;Terraform action to perform&apos;
+        )
+        string(
+            name: &apos;INSTANCE_TYPE&apos;,
+            defaultValue: &apos;t3.micro&apos;,
+            description: &apos;EC2 instance type for the target instance&apos;
+        )
+    }
+
+    environment {
+        TF_DIR     = &apos;infra/target-ec2&apos;
+        TF_KEY     = &apos;jenkins-terraform-ec2/target-ec2/terraform.tfstate&apos;
+        AWS_REGION = &apos;us-east-1&apos;
+    }
+
+    stages {
+        stage(&apos;Terraform Init&apos;) {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: &apos;aws-credentials&apos;,
+                        usernameVariable: &apos;AWS_ACCESS_KEY_ID&apos;,
+                        passwordVariable: &apos;AWS_SECRET_ACCESS_KEY&apos;
+                    ),
+                    string(credentialsId: &apos;TF_STATE_BUCKET&apos;, variable: &apos;BUCKET&apos;),
+                    string(credentialsId: &apos;SSH_PUBLIC_KEY&apos;, variable: &apos;TF_VAR_ssh_public_key&apos;)
+                ]) {
+                    sh &apos;&apos;&apos;
+                        cd ${TF_DIR}
+                        terraform init -input=false -reconfigure \
+                            -backend-config="bucket=${BUCKET}" \
+                            -backend-config="key=${TF_KEY}" \
+                            -backend-config="region=${AWS_REGION}"
+                    &apos;&apos;&apos;
+                }
+            }
+        }
+
+        stage(&apos;Terraform Plan&apos;) {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: &apos;aws-credentials&apos;,
+                        usernameVariable: &apos;AWS_ACCESS_KEY_ID&apos;,
+                        passwordVariable: &apos;AWS_SECRET_ACCESS_KEY&apos;
+                    ),
+                    string(credentialsId: &apos;SSH_PUBLIC_KEY&apos;, variable: &apos;TF_VAR_ssh_public_key&apos;)
+                ]) {
+                    sh &apos;&apos;&apos;
+                        cd ${TF_DIR}
+                        terraform plan -input=false \
+                            -var="instance_type=${INSTANCE_TYPE}" \
+                            -out=tfplan
+                    &apos;&apos;&apos;
+                }
+            }
+        }
+
+        stage(&apos;Approval&apos;) {
+            when {
+                expression { params.ACTION == &apos;apply&apos; || params.ACTION == &apos;destroy&apos; }
+            }
+            steps {
+                input message: "Approve Terraform ${params.ACTION}?", ok: &apos;Proceed&apos;
+            }
+        }
+
+        stage(&apos;Terraform Apply&apos;) {
+            when { expression { params.ACTION == &apos;apply&apos; } }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: &apos;aws-credentials&apos;,
+                        usernameVariable: &apos;AWS_ACCESS_KEY_ID&apos;,
+                        passwordVariable: &apos;AWS_SECRET_ACCESS_KEY&apos;
+                    ),
+                    string(credentialsId: &apos;SSH_PUBLIC_KEY&apos;, variable: &apos;TF_VAR_ssh_public_key&apos;)
+                ]) {
+                    sh &apos;cd ${TF_DIR} &amp;&amp; terraform apply -input=false tfplan&apos;
+                    sh &apos;cd ${TF_DIR} &amp;&amp; echo "=== Outputs ===" &amp;&amp; terraform output&apos;
+                }
+            }
+        }
+
+        stage(&apos;Terraform Destroy&apos;) {
+            when { expression { params.ACTION == &apos;destroy&apos; } }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: &apos;aws-credentials&apos;,
+                        usernameVariable: &apos;AWS_ACCESS_KEY_ID&apos;,
+                        passwordVariable: &apos;AWS_SECRET_ACCESS_KEY&apos;
+                    ),
+                    string(credentialsId: &apos;SSH_PUBLIC_KEY&apos;, variable: &apos;TF_VAR_ssh_public_key&apos;)
+                ]) {
+                    sh &apos;&apos;&apos;
+                        cd ${TF_DIR}
+                        terraform destroy -input=false -auto-approve \
+                            -var="instance_type=${INSTANCE_TYPE}"
+                    &apos;&apos;&apos;
+                }
+            }
+        }
+    }
+
+    post {
+        success { echo "Pipeline completed: ACTION=${params.ACTION}" }
+        failure { echo "Pipeline FAILED: ACTION=${params.ACTION}" }
+        always  { cleanWs() }
+    }
+}
+    </script>
+    <sandbox>true</sandbox>
   </definition>
   <disabled>false</disabled>
 </flow-definition>
