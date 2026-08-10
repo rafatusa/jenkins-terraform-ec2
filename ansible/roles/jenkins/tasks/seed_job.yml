@@ -12,41 +12,42 @@
   until: jenkins_api.status == 200
   no_log: true
 
-- name: Set Jenkins URL via script console (required for CLI handshake)
-  uri:
-    url: "http://127.0.0.1:8080/scriptText"
-    method: POST
-    user: admin
-    password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
-    force_basic_auth: true
-    body: "script=import+jenkins.model.*%3BJenkinsLocationConfiguration.get().setUrl('http%3A%2F%2F{{ ansible_host }}%3A8080%2F')%3BJenkinsLocationConfiguration.get().save()"
-    status_code: 200
-  no_log: true
-
 - name: Copy Deploy-EC2 job XML to Jenkins home
   copy:
     src: seed-job.xml
     dest: /var/jenkins_home/deploy-ec2-job.xml
     mode: '0644'
 
-- name: Download Jenkins CLI jar from running container
+- name: Create Deploy-EC2 pipeline job via REST API
   shell: |
-    curl -fsSL -o /usr/local/bin/jenkins-cli.jar \
-      http://127.0.0.1:8080/jnlpJars/jenkins-cli.jar
-  args:
-    creates: /usr/local/bin/jenkins-cli.jar
-
-- name: Install Java 21 on host for Jenkins CLI
-  apt:
-    name: openjdk-21-jre-headless
-    state: present
-
-- name: Create Deploy-EC2 pipeline job via Jenkins CLI
-  shell: |
-    java -jar /usr/local/bin/jenkins-cli.jar \
-      -s http://127.0.0.1:8080 \
-      -auth "admin:${JENKINS_ADMIN_PASSWORD}" \
-      create-job "Deploy-EC2" < /var/jenkins_home/deploy-ec2-job.xml
+    set -e
+    # Fetch crumb and session cookie in one request
+    CRUMB_RESPONSE=$(curl -s -c /tmp/jenkins-cookies.txt \
+      -u "admin:${JENKINS_ADMIN_PASSWORD}" \
+      "http://127.0.0.1:8080/crumbIssuer/api/json")
+    CRUMB_FIELD=$(echo "$CRUMB_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField'])")
+    CRUMB_VALUE=$(echo "$CRUMB_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumb'])")
+    # Create job using same session
+    HTTP_STATUS=$(curl -s -o /tmp/jenkins-create-output.txt -w "%{http_code}" \
+      -b /tmp/jenkins-cookies.txt \
+      -u "admin:${JENKINS_ADMIN_PASSWORD}" \
+      -H "${CRUMB_FIELD}: ${CRUMB_VALUE}" \
+      -H "Content-Type: application/xml" \
+      --data-binary @/var/jenkins_home/deploy-ec2-job.xml \
+      "http://127.0.0.1:8080/createItem?name=Deploy-EC2")
+    echo "HTTP status: $HTTP_STATUS"
+    if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ]; then
+      echo "Job created successfully"
+      exit 0
+    fi
+    # 400 means job already exists — that's fine (idempotent)
+    if [ "$HTTP_STATUS" = "400" ]; then
+      echo "Job already exists — skipping"
+      exit 0
+    fi
+    echo "Failed with status $HTTP_STATUS"
+    cat /tmp/jenkins-create-output.txt | head -20
+    exit 1
   args:
     creates: /var/jenkins_home/jobs/Deploy-EC2/config.xml
   environment:
