@@ -18,36 +18,14 @@
     dest: /var/jenkins_home/deploy-ec2-job.xml
     mode: '0644'
 
+- name: Copy job creation script to host
+  copy:
+    src: create-job.sh
+    dest: /usr/local/bin/create-jenkins-job.sh
+    mode: '0755'
+
 - name: Create Deploy-EC2 pipeline job via REST API
-  shell: |
-    set -e
-    # Fetch crumb and session cookie in one request
-    CRUMB_RESPONSE=$(curl -s -c /tmp/jenkins-cookies.txt \
-      -u "admin:${JENKINS_ADMIN_PASSWORD}" \
-      "http://127.0.0.1:8080/crumbIssuer/api/json")
-    CRUMB_FIELD=$(echo "$CRUMB_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField'])")
-    CRUMB_VALUE=$(echo "$CRUMB_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumb'])")
-    # Create job using same session
-    HTTP_STATUS=$(curl -s -o /tmp/jenkins-create-output.txt -w "%{http_code}" \
-      -b /tmp/jenkins-cookies.txt \
-      -u "admin:${JENKINS_ADMIN_PASSWORD}" \
-      -H "${CRUMB_FIELD}: ${CRUMB_VALUE}" \
-      -H "Content-Type: application/xml" \
-      --data-binary @/var/jenkins_home/deploy-ec2-job.xml \
-      "http://127.0.0.1:8080/createItem?name=Deploy-EC2")
-    echo "HTTP status: $HTTP_STATUS"
-    if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ]; then
-      echo "Job created successfully"
-      exit 0
-    fi
-    # 400 means job already exists — that's fine (idempotent)
-    if [ "$HTTP_STATUS" = "400" ]; then
-      echo "Job already exists — skipping"
-      exit 0
-    fi
-    echo "Failed with status $HTTP_STATUS"
-    cat /tmp/jenkins-create-output.txt | head -20
-    exit 1
+  command: /usr/local/bin/create-jenkins-job.sh
   args:
     creates: /var/jenkins_home/jobs/Deploy-EC2/config.xml
   environment:
