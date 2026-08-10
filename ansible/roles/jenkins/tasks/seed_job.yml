@@ -1,4 +1,9 @@
 ---
+# seed_job.yml — create the Deploy-EC2 pipeline job in Jenkins via REST API
+# The Jenkins home dir lives inside a Docker volume, so we:
+#   1. Copy the job XML to /tmp on the HOST (accessible to the shell)
+#   2. Copy the creation script to the host and run it with the password in env
+
 - name: Wait for Jenkins API to be responsive
   uri:
     url: "http://127.0.0.1:8080/api/json"
@@ -10,12 +15,11 @@
   retries: 20
   delay: 15
   until: jenkins_api.status == 200
-  no_log: true
 
-- name: Copy Deploy-EC2 job XML to Jenkins home
+- name: Copy Deploy-EC2 job XML to /tmp on host
   copy:
     src: seed-job.xml
-    dest: /var/jenkins_home/deploy-ec2-job.xml
+    dest: /tmp/deploy-ec2-job.xml
     mode: '0644'
 
 - name: Copy job creation script to host
@@ -25,9 +29,13 @@
     mode: '0755'
 
 - name: Create Deploy-EC2 pipeline job via REST API
-  command: /usr/local/bin/create-jenkins-job.sh
-  args:
-    creates: /var/jenkins_home/jobs/Deploy-EC2/config.xml
+  shell: /usr/local/bin/create-jenkins-job.sh
   environment:
     JENKINS_ADMIN_PASSWORD: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
-  no_log: true
+  register: create_job_result
+  changed_when: "'SUCCESS' in create_job_result.stdout or 'created' in create_job_result.stdout"
+  failed_when: create_job_result.rc != 0
+
+- name: Show job creation output
+  debug:
+    msg: "{{ create_job_result.stdout_lines }}"
